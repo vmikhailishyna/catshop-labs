@@ -1,0 +1,84 @@
+name: publish-lab-02
+
+on:
+  push:
+    paths:
+      - 'lab-02/**'
+      - '.github/workflows/publish-lab-02.yml'
+  pull_request:
+    paths:
+      - 'lab-02/**'
+      - '.github/workflows/publish-lab-02.yml'
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: lab-02
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest tests -q
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: lab-02
+          push: false
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+  publish:
+    needs: [test, build]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: lab-02
+          push: true
+          tags: ${{ steps.meta.outputs.image }}:${{ github.sha }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+      - run: echo "published ${{ steps.meta.outputs.image }}@${{ steps.build.outputs.digest }}" >> "$GITHUB_STEP_SUMMARY"
+
+  qa:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: pull exactly what was published
+        run: |
+          REF="${{ needs.publish.outputs.image }}@${{ needs.publish.outputs.digest }}"
+          docker pull -q "$REF"
+          docker run -d --name app -p 8080:8080 "$REF"
+          for _ in $(seq 30); do curl -fsS localhost:8080/health && break; sleep 1; done
+          curl -fsS localhost:8080/visits

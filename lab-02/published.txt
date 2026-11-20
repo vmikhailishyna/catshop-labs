@@ -1,0 +1,1 @@
+ghcr.io/vmikhailishyna/catshop-labs@sha256:cd152f794fcbfa1debb4075f388c56aad93259f6d79bfb2a27d1ca426261d86e
